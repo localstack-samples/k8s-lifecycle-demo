@@ -182,9 +182,13 @@ else
   # k3s, which bundles its own containerd. The 'ctr' CLI is not in PATH, but
   # 'k3s ctr' is, and it uses the k3s-specific socket at:
   #   /run/k3s/containerd/containerd.sock
+  # LocalStack appends a hash to the cluster name and also creates a
+  # "tools" helper container — neither has k3s. Target the server node:
+  #   k3d-<cluster>-<hash>-server-0
   K3D_CONTAINER=$(docker ps \
     --filter "name=k3d-${CLUSTER_NAME}" \
-    --format "{{.Names}}" | head -1)
+    --format "{{.Names}}" \
+    | grep -E "\-server-[0-9]+$" | head -1)
   if [[ -z "${K3D_CONTAINER}" ]]; then
     echo "ERROR: Could not find k3d container for cluster '${CLUSTER_NAME}'."
     echo "Install k3d (https://k3d.io) and re-run, or check 'docker ps'."
