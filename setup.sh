@@ -195,8 +195,20 @@ else
     exit 1
   fi
   info "Importing into container: ${K3D_CONTAINER}"
-  docker save "${IMAGE_NAME}" | docker exec -i "${K3D_CONTAINER}" \
-    k3s ctr --address /run/k3s/containerd/containerd.sock images import -
+  # k3s embeds containerd at a non-default socket; use the standalone ctr
+  # binary (not 'k3s ctr' — not a valid subcommand in all k3s versions).
+  # Images must land in the k8s.io namespace or kubelet won't find them.
+  # docker cp + file path is more reliable than piping via stdin.
+  local TMP_TAR
+  TMP_TAR=$(mktemp /tmp/counter-app-XXXXXX.tar)
+  docker save "${IMAGE_NAME}" > "${TMP_TAR}"
+  docker cp "${TMP_TAR}" "${K3D_CONTAINER}:/tmp/counter-app.tar"
+  rm -f "${TMP_TAR}"
+  docker exec "${K3D_CONTAINER}" sh -c \
+    'ctr --address /run/k3s/containerd/containerd.sock \
+         --namespace k8s.io \
+         images import /tmp/counter-app.tar \
+    && rm /tmp/counter-app.tar'
 fi
 info "Image '${IMAGE_NAME}' is available in the cluster."
 
