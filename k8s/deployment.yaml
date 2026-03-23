@@ -1,0 +1,92 @@
+---
+# ── Namespace ──────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+
+---
+# ── Deployment ─────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: counter-app
+  namespace: demo
+  labels:
+    app: counter-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: counter-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: counter-app
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: counter-app
+          image: counter-app:latest
+          # Never pull from a registry — use the image we loaded into the cluster
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          # Expose pod identity via the Downward API
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          # ── Resource requests/limits (give the Scheduler something to score) ──
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          # ── Readiness probe — controls Service endpoint registration ──────────
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+          # ── Liveness probe — triggers container restart on failure ────────────
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+
+---
+# ── Service ────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: counter-app
+  namespace: demo
+spec:
+  selector:
+    app: counter-app
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      nodePort: 30080
