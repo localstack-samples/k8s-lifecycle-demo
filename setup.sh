@@ -47,7 +47,90 @@ else
 fi
 info "LocalStack is up."
 
-# ── 3. Create EKS cluster ──────────────────────────────────────────────────────
+# ── 3. Create VPC networking resources ────────────────────────────────────────
+# LocalStack's EKS implementation actually calls DescribeSubnets, so we must
+# create real (locally-emulated) VPC/subnet/SG resources before CreateCluster.
+heading "Provisioning VPC networking for EKS"
+
+VPC_ID=$($AWSCLI ec2 describe-vpcs --region "${REGION}" \
+  --filters "Name=tag:Name,Values=eks-demo-vpc" \
+  --query 'Vpcs[0].VpcId' --output text 2>/dev/null || echo "None")
+
+if [[ "${VPC_ID}" == "None" || -z "${VPC_ID}" ]]; then
+  info "Creating VPC..."
+  VPC_ID=$($AWSCLI ec2 create-vpc \
+    --cidr-block 10.0.0.0/16 \
+    --region "${REGION}" \
+    --query 'Vpc.VpcId' --output text)
+  $AWSCLI ec2 create-tags \
+    --resources "${VPC_ID}" \
+    --tags Key=Name,Value=eks-demo-vpc \
+    --region "${REGION}"
+  info "VPC: ${VPC_ID}"
+else
+  info "Reusing existing VPC: ${VPC_ID}"
+fi
+
+SUBNET_ID=$($AWSCLI ec2 describe-subnets --region "${REGION}" \
+  --filters "Name=vpc-id,Values=${VPC_ID}" "Name=tag:Name,Values=eks-demo-subnet" \
+  --query 'Subnets[0].SubnetId' --output text 2>/dev/null || echo "None")
+
+if [[ "${SUBNET_ID}" == "None" || -z "${SUBNET_ID}" ]]; then
+  info "Creating subnet..."
+  SUBNET_ID=$($AWSCLI ec2 create-subnet \
+    --vpc-id "${VPC_ID}" \
+    --cidr-block 10.0.1.0/24 \
+    --region "${REGION}" \
+    --query 'Subnet.SubnetId' --output text)
+  $AWSCLI ec2 create-tags \
+    --resources "${SUBNET_ID}" \
+    --tags Key=Name,Value=eks-demo-subnet \
+    --region "${REGION}"
+  info "Subnet: ${SUBNET_ID}"
+else
+  info "Reusing existing subnet: ${SUBNET_ID}"
+fi
+
+SG_ID=$($AWSCLI ec2 describe-security-groups --region "${REGION}" \
+  --filters "Name=vpc-id,Values=${VPC_ID}" "Name=group-name,Values=eks-demo-sg" \
+  --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "None")
+
+if [[ "${SG_ID}" == "None" || -z "${SG_ID}" ]]; then
+  info "Creating security group..."
+  SG_ID=$($AWSCLI ec2 create-security-group \
+    --group-name eks-demo-sg \
+    --description "EKS demo security group" \
+    --vpc-id "${VPC_ID}" \
+    --region "${REGION}" \
+    --query 'GroupId' --output text)
+  info "Security group: ${SG_ID}"
+else
+  info "Reusing existing security group: ${SG_ID}"
+fi
+
+# IAM role — LocalStack doesn't validate the trust policy but the ARN must exist
+ROLE_ARN=$($AWSCLI iam get-role --role-name eks-demo-role \
+  --query 'Role.Arn' --output text 2>/dev/null || echo "")
+
+if [[ -z "${ROLE_ARN}" ]]; then
+  info "Creating IAM role for EKS..."
+  ROLE_ARN=$($AWSCLI iam create-role \
+    --role-name eks-demo-role \
+    --assume-role-policy-document '{
+      "Version":"2012-10-17",
+      "Statement":[{
+        "Effect":"Allow",
+        "Principal":{"Service":"eks.amazonaws.com"},
+        "Action":"sts:AssumeRole"
+      }]
+    }' \
+    --query 'Role.Arn' --output text)
+  info "IAM role: ${ROLE_ARN}"
+else
+  info "Reusing existing IAM role: ${ROLE_ARN}"
+fi
+
+# ── 4. Create EKS cluster ──────────────────────────────────────────────────────
 heading "Creating EKS cluster: ${CLUSTER_NAME}"
 if $AWSCLI eks describe-cluster --name "${CLUSTER_NAME}" --region "${REGION}" \
      --query 'cluster.status' --output text 2>/dev/null | grep -q ACTIVE; then
@@ -57,8 +140,8 @@ else
   $AWSCLI eks create-cluster \
     --name "${CLUSTER_NAME}" \
     --kubernetes-version "${K8S_VERSION}" \
-    --role-arn "arn:aws:iam::000000000000:role/eks-role" \
-    --resources-vpc-config subnetIds=subnet-00000000,securityGroupIds=sg-00000000 \
+    --role-arn "${ROLE_ARN}" \
+    --resources-vpc-config "subnetIds=${SUBNET_ID},securityGroupIds=${SG_ID}" \
     --region "${REGION}"
 
   info "Waiting for cluster to become ACTIVE..."
@@ -71,7 +154,7 @@ else
 fi
 info "Cluster '${CLUSTER_NAME}' is ACTIVE."
 
-# ── 4. Configure kubectl ───────────────────────────────────────────────────────
+# ── 5. Configure kubectl ───────────────────────────────────────────────────────
 heading "Configuring kubectl"
 $AWSCLI eks update-kubeconfig \
   --name "${CLUSTER_NAME}" \
@@ -82,12 +165,12 @@ kubectl config use-context "${CLUSTER_NAME}"
 info "kubectl context set to '${CLUSTER_NAME}'."
 kubectl cluster-info
 
-# ── 5. Build the app image ─────────────────────────────────────────────────────
+# ── 6. Build the app image ─────────────────────────────────────────────────────
 heading "Building app image: ${IMAGE_NAME}"
 docker build -t "${IMAGE_NAME}" "${SCRIPT_DIR}/app"
 info "Image built."
 
-# ── 6. Load image into the cluster ────────────────────────────────────────────
+# ── 7. Load image into the cluster ────────────────────────────────────────────
 # LocalStack EKS uses k3d under the hood.
 heading "Loading image into cluster nodes"
 if command -v k3d &>/dev/null; then
