@@ -178,16 +178,21 @@ if command -v k3d &>/dev/null; then
   k3d image import "${IMAGE_NAME}" --cluster "${CLUSTER_NAME}"
 else
   warn "k3d not found — falling back to docker exec import."
-  # Find the k3d server container LocalStack created
-  K3D_CONTAINER=$(docker ps --filter "name=k3d-${CLUSTER_NAME}" --format "{{.Names}}" | head -1)
+  # LocalStack EKS creates k3d containers internally. Each node container runs
+  # k3s, which bundles its own containerd. The 'ctr' CLI is not in PATH, but
+  # 'k3s ctr' is, and it uses the k3s-specific socket at:
+  #   /run/k3s/containerd/containerd.sock
+  K3D_CONTAINER=$(docker ps \
+    --filter "name=k3d-${CLUSTER_NAME}" \
+    --format "{{.Names}}" | head -1)
   if [[ -z "${K3D_CONTAINER}" ]]; then
     echo "ERROR: Could not find k3d container for cluster '${CLUSTER_NAME}'."
     echo "Install k3d (https://k3d.io) and re-run, or check 'docker ps'."
     exit 1
   fi
   info "Importing into container: ${K3D_CONTAINER}"
-  docker save "${IMAGE_NAME}" \
-    | docker exec -i "${K3D_CONTAINER}" ctr images import -
+  docker save "${IMAGE_NAME}" | docker exec -i "${K3D_CONTAINER}" \
+    k3s ctr --address /run/k3s/containerd/containerd.sock images import -
 fi
 info "Image '${IMAGE_NAME}' is available in the cluster."
 
