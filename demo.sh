@@ -294,19 +294,29 @@ step6_ready() {
   cmd "kubectl get endpoints counter-app -n ${NAMESPACE}"
 
   echo ""
-  narrate "Hitting the service a few times to show pod-level routing..."
-  local svc_port
-  svc_port=$(kubectl get svc counter-app -n "${NAMESPACE}" \
-    -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30080")
-  local node_ip
-  node_ip=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null \
-    || echo "localhost")
-  for i in 1 2 3 4; do
-    curl -sf "http://${node_ip}:${svc_port}/" 2>/dev/null \
-      | python3 -m json.tool 2>/dev/null \
-      || echo "  (curl unavailable — service reachable at ${node_ip}:${svc_port})"
-    sleep 1
-  done
+  narrate "Hitting the service 4 times to show load-balancing across pods..."
+  narrate "(running inside the cluster — the node IP is on the Docker bridge, not host-reachable)"
+  # Pick any running pod to exec from; the Service DNS name load-balances
+  # across all Ready pods, so responses will show different pod names.
+  local exec_pod
+  exec_pod=$(kubectl get pods -n "${NAMESPACE}" \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  if [[ -z "${exec_pod}" ]]; then
+    narrate "No running pod found to exec from — skipping curl demo."
+  else
+    local svc_url="http://counter-app.${NAMESPACE}.svc.cluster.local/"
+    for i in 1 2 3 4; do
+      echo -e "  ${CYAN}\$${NC}  ${BOLD}kubectl exec ${exec_pod} -n ${NAMESPACE} -- python3 -c \"...urllib ${svc_url}\"${NC}"
+      kubectl exec "${exec_pod}" -n "${NAMESPACE}" -- \
+        python3 -c "
+import urllib.request, json
+resp = urllib.request.urlopen('${svc_url}')
+print(json.dumps(json.loads(resp.read()), indent=2))
+" 2>/dev/null || echo "  (request failed)"
+      sleep 1
+    done
+  fi
   pause
 }
 

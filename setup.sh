@@ -199,7 +199,6 @@ else
   # binary (not 'k3s ctr' — not a valid subcommand in all k3s versions).
   # Images must land in the k8s.io namespace or kubelet won't find them.
   # docker cp + file path is more reliable than piping via stdin.
-  local TMP_TAR
   TMP_TAR=$(mktemp /tmp/counter-app-XXXXXX.tar)
   docker save "${IMAGE_NAME}" > "${TMP_TAR}"
   docker cp "${TMP_TAR}" "${K3D_CONTAINER}:/tmp/counter-app.tar"

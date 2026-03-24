@@ -29,6 +29,13 @@ spec:
       labels:
         app: counter-app
     spec:
+      # k3d (used by LocalStack EKS) creates a single-node cluster where the
+      # only node is a control-plane node. Tolerate that taint so pods can
+      # schedule. Remove this if you add dedicated worker nodes.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
       terminationGracePeriodSeconds: 10
       containers:
         - name: counter-app

@@ -66,7 +66,7 @@ export LOCALSTACK_AUTH_TOKEN=<your-token>
 
 Add it to your shell profile so it persists across sessions.
 
-### 2. Run setup (do this before the talk)
+### 2. Run setup 
 
 ```bash
 chmod +x setup.sh demo.sh
