@@ -45,9 +45,8 @@ k8s-lifecycle-demo/
 |------|---------|---------|
 | Docker Desktop | ≥ 4.x | https://docs.docker.com/get-docker/ |
 | kubectl | ≥ 1.28 | https://kubernetes.io/docs/tasks/tools/ |
-| AWS CLI v2 | ≥ 2.x | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html |
-| awslocal | latest | `pip install awscli-local` |
-| LocalStack CLI | latest | `pip install localstack` |
+| AWS CLI v2 | ≥ 2.x | https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html (required by `lstk aws`) |
+| [lstk](https://docs.localstack.cloud/aws/developer-tools/running-localstack/lstk/) | latest | `npm install -g @localstack/lstk` |
 | k3d | ≥ 5.x | https://k3d.io/#installation |
 | Python 3.11+ | (for the app build) | https://python.org |
 
@@ -155,7 +154,7 @@ CLUSTER_NAME=my-cluster AUTO=1 ./demo.sh
 kubectl delete namespace demo
 
 # Tear down the whole cluster
-awslocal eks delete-cluster --name lifecycle-demo
+lstk aws eks delete-cluster --name lifecycle-demo
 
 # Stop LocalStack
 docker compose down -v
