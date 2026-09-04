@@ -18,16 +18,16 @@ heading() { echo -e "\n${BOLD}${CYAN}==> $*${NC}\n"; }
 
 # ── 1. Prerequisite check ──────────────────────────────────────────────────────
 heading "Checking prerequisites"
-for cmd in docker kubectl aws localstack; do
+for cmd in docker kubectl aws lstk; do
   if ! command -v "$cmd" &>/dev/null; then
     echo "ERROR: '$cmd' not found. See README.md for installation instructions."
     exit 1
   fi
 done
-# awslocal is a thin wrapper; fall back to AWS CLI with endpoint override
+# lstk aws is a thin wrapper; fall back to AWS CLI with endpoint override
 AWSCLI="aws --endpoint-url=http://localhost:4566"
-if command -v awslocal &>/dev/null; then
-  AWSCLI="awslocal"
+if command -v lstk &>/dev/null; then
+  AWSCLI="lstk aws"
 fi
 info "All prerequisites found."
 
