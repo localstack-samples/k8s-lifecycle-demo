@@ -175,7 +175,17 @@ info "Image built."
 heading "Loading image into cluster nodes"
 if command -v k3d &>/dev/null; then
   info "Using k3d to import image..."
-  k3d image import "${IMAGE_NAME}" --cluster "${CLUSTER_NAME}"
+  # LocalStack EKS appends a hash to the k3d cluster name (e.g.
+  # "lifecycle-demo-24dc4f3f"), so we can't pass CLUSTER_NAME straight
+  # through to '--cluster' — resolve the real k3d cluster name first.
+  K3D_CLUSTER=$(k3d cluster list --no-headers | awk '{print $1}' | grep -E "^${CLUSTER_NAME}(-[0-9a-f]+)?$" | head -1)
+  if [[ -z "${K3D_CLUSTER}" ]]; then
+    echo "ERROR: Could not find a k3d cluster matching '${CLUSTER_NAME}'."
+    echo "Check 'k3d cluster list' and re-run."
+    exit 1
+  fi
+  info "Resolved k3d cluster: ${K3D_CLUSTER}"
+  k3d image import "${IMAGE_NAME}" --cluster "${K3D_CLUSTER}"
 else
   warn "k3d not found — falling back to docker exec import."
   # LocalStack EKS creates k3d containers internally. Each node container runs
