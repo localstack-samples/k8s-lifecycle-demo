@@ -5,7 +5,7 @@ set -euo pipefail
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 CLUSTER_NAME="${CLUSTER_NAME:-lifecycle-demo}"
-K8S_VERSION="${K8S_VERSION:-1.29}"
+K8S_VERSION="${K8S_VERSION:-1.31}"
 IMAGE_NAME="counter-app:latest"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,11 +35,23 @@ info "All prerequisites found."
 heading "Starting LocalStack"
 if docker ps --format '{{.Names}}' | grep -q "^localstack"; then
   warn "LocalStack container already running — skipping start."
+elif command -v lstk &>/dev/null; then
+  # Prefer lstk: it manages the auth token via its own keyring/config, so it
+  # works even when LOCALSTACK_AUTH_TOKEN isn't exported in this shell (unlike
+  # the raw docker-compose path below, whose Pro container fails license
+  # activation without that env var explicitly set).
+  info "Starting LocalStack via lstk..."
+  lstk start --type aws
 else
   info "Starting LocalStack via Docker Compose..."
+  if [[ -z "${LOCALSTACK_AUTH_TOKEN:-}" ]]; then
+    echo "ERROR: LOCALSTACK_AUTH_TOKEN is not set — the Pro container will fail license activation."
+    echo "Export it (see README) or install lstk and run 'lstk login' instead."
+    exit 1
+  fi
   docker compose -f "${SCRIPT_DIR}/docker-compose.yml" up -d
   info "Waiting for LocalStack to be ready..."
-  until curl -sf http://localhost:4566/_localstack/health | grep -q '"eks": "running"' 2>/dev/null; do
+  until curl -sf http://localhost:4566/_localstack/health | grep -qE '"eks": ?"(running|available)"' 2>/dev/null; do
     echo -n "."
     sleep 3
   done

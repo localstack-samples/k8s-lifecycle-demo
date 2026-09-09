@@ -1,6 +1,6 @@
 # Kubernetes Deployment Lifecycle — EKS on LocalStack
 
-A self-contained demo that makes all **7 steps** of the Kubernetes Deployment Lifecycle **visible in real time**, using a locally emulated EKS cluster powered by [LocalStack](https://localstack.cloud).
+A self-contained demo that makes the Kubernetes Deployment Lifecycle **visible in real time** — the 7-step relay race, plus self-healing as step 8 — using a locally emulated EKS cluster powered by [LocalStack](https://localstack.cloud).
 
 ```
 kubectl apply
@@ -33,7 +33,8 @@ k8s-lifecycle-demo/
 │   └── deployment.yaml   # Namespace + Deployment (2 replicas) + NodePort Service
 ├── docker-compose.yml    # LocalStack Pro container
 ├── setup.sh              # One-time cluster setup (run before the talk)
-├── demo.sh               # 7-step live demo script
+├── demo.sh               # 8-step live demo script (7-step relay race + self-healing)
+├── cleanup.sh            # Tear down the cluster and LocalStack
 └── README.md
 ```
 
@@ -95,17 +96,20 @@ AUTO=1 STEP_DELAY=6 ./demo.sh
 
 ---
 
-## The 7 steps
+## The Deployment Lifecycle: 7 steps (+ self-healing as step 8)
+
+Like a relay race — each component passes the baton.
 
 | # | Component | What you'll see |
 |---|-----------|-----------------|
-| 1 | **API Server** | `kubectl apply` → HTTP 201, object stored in etcd |
-| 2 | **Controller Manager** | Deployment + ReplicaSet reconciliation, Pod objects appear |
-| 3 | **Scheduler** | Pods assigned to nodes; `kubectl describe pod | grep Node:` |
-| 4 | **Kubelet** | Image pull events, container start events |
-| 5 | **Pod phase** | `kubectl get pods -w` → `Pending → Running` |
-| 6 | **Readiness probe** | `Running → Ready`; Service Endpoints populated |
-| 7 | **Self-healing** | Pod deleted → replacement races through lifecycle again |
+| 1 | **kubectl sends manifest** | YAML serialised, POSTed to the API Server |
+| 2 | **API Server validates & stores in etcd** | HTTP 201, object stored in etcd |
+| 3 | **Controller Manager detects change** | Deployment Controller reconciles, creates a ReplicaSet |
+| 4 | **ReplicaSet creates Pod objects** | 2 Pod objects appear in etcd, still Pending |
+| 5 | **Scheduler assigns pods to nodes** | Pods assigned to nodes; `kubectl describe pod | grep Node:` |
+| 6 | **kubelet pulls image & starts container** | Image pull events, container start events, `Pending → Running` |
+| 7 | **Pod becomes Ready** | Readiness probe passes; Service Endpoints populated |
+| 8 | **Self-healing** | Pod deleted → replacement races through the relay again |
 
 ---
 
@@ -150,6 +154,17 @@ CLUSTER_NAME=my-cluster AUTO=1 ./demo.sh
 ## Cleanup
 
 ```bash
+./cleanup.sh
+```
+
+`cleanup.sh` will:
+1. Delete the `demo` namespace
+2. Delete the EKS cluster
+3. Stop LocalStack
+
+Or do it by hand:
+
+```bash
 # Remove demo namespace
 kubectl delete namespace demo
 
@@ -157,7 +172,7 @@ kubectl delete namespace demo
 lstk aws eks delete-cluster --name lifecycle-demo
 
 # Stop LocalStack
-docker compose down -v
+lstk stop
 ```
 
 ---

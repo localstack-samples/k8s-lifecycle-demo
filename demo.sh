@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# demo.sh — Live walkthrough of the 7 steps of the Kubernetes Deployment Lifecycle.
+# demo.sh — Live walkthrough of the Kubernetes Deployment Lifecycle:
+# the 7 steps of the "relay race" (kubectl → API Server → Controller Manager
+# → ReplicaSet → Scheduler → kubelet → Ready), plus Step 8: Self-Healing.
 #
 # Prerequisites: run ./setup.sh first to create the LocalStack EKS cluster
 #                and load the app image.
@@ -14,6 +16,7 @@ NAMESPACE="demo"
 CLUSTER_NAME="${CLUSTER_NAME:-lifecycle-demo}"
 STEP_DELAY="${STEP_DELAY:-4}"   # seconds to wait in AUTO mode
 AUTO="${AUTO:-0}"
+TOTAL_STEPS=8
 
 # ── Colors & formatting ────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -45,7 +48,7 @@ step_header() {
   local subtitle="$3"
   echo ""
   echo -e "${BLUE}$(printf '─%.0s' $(seq 1 60))${NC}"
-  echo -e "  ${BOLD}${YELLOW}STEP ${num}${NC}  ${BOLD}${title}${NC}"
+  echo -e "  ${BOLD}${YELLOW}STEP ${num} / ${TOTAL_STEPS}${NC}  ${BOLD}${title}${NC}"
   echo -e "  ${DIM}${subtitle}${NC}"
   echo -e "${BLUE}$(printf '─%.0s' $(seq 1 60))${NC}"
   echo ""
@@ -124,65 +127,105 @@ preflight() {
 
   narrate "Cleaning up any previous demo run..."
   kubectl delete namespace "${NAMESPACE}" --ignore-not-found --wait=true 2>/dev/null || true
-  narrate "Cluster is ready. Let's walk through all 7 steps of the Deployment Lifecycle."
+  narrate "Cluster is ready. Like a relay race — each component passes the baton."
   pause
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 1 — kubectl apply → API Server ingestion
+# STEP 1 — kubectl sends manifest
 # ══════════════════════════════════════════════════════════════════════════════
-step1_api_server() {
-  step_header "1 / 7" "API Server — Manifest Submission" \
+step1_kubectl_sends() {
+  step_header "1" "kubectl sends manifest" \
     "kubectl serialises the YAML and POSTs it to /apis/apps/v1/deployments"
 
-  narrate "We run 'kubectl apply'. kubectl:"
-  narrate "  1. Reads the local YAML and serialises it to JSON"
-  narrate "  2. Sends a POST (or PATCH) to the API Server"
-  narrate "  3. The API Server validates the object against its OpenAPI schema"
-  narrate "  4. Persists the object in etcd — the cluster's source of truth"
-  narrate "  5. Returns HTTP 201 Created"
+  narrate "This is the client-side half of the handoff:"
+  narrate "  1. kubectl reads the local YAML"
+  narrate "  2. Serialises it to JSON"
+  narrate "  3. Sends a POST (or PATCH) to the API Server"
+  narrate "Nothing else in the cluster is involved yet — this is just the send."
   echo ""
 
   cmd "kubectl apply -f k8s/deployment.yaml"
 
-  narrate "The Deployment, ReplicaSet objects, and Namespace now live in etcd."
-  narrate "Nothing has been scheduled yet — the pods exist only as intent."
+  narrate "The request is on its way. What happens to it next is the API Server's job."
   pause
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 2 — Controller Manager reconciliation
+# STEP 2 — API Server validates & stores in etcd
 # ══════════════════════════════════════════════════════════════════════════════
-step2_controllers() {
-  step_header "2 / 7" "Controller Manager — Reconciliation Loop" \
-    "Deployment Controller → ReplicaSet Controller → Pod objects created"
+step2_api_server() {
+  step_header "2" "API Server validates & stores in etcd" \
+    "Schema validation, then persisted in etcd — the cluster's source of truth"
 
-  narrate "The Controller Manager runs many control loops. Two fire immediately:"
+  narrate "The API Server:"
+  narrate "  1. Validates the object against its OpenAPI schema"
+  narrate "  2. Persists it in etcd"
+  narrate "  3. Returns HTTP 201 Created"
   narrate ""
-  narrate "  Deployment Controller:"
-  narrate "    desired replicas=2, actual=0 → creates a ReplicaSet"
-  narrate ""
-  narrate "  ReplicaSet Controller:"
-  narrate "    desired pods=2, actual=0 → creates 2 Pod objects in etcd"
-  narrate "    (pods have no Node assigned yet — status is Pending)"
+  narrate "The Namespace, Deployment, and Service objects now live in etcd."
+  narrate "Our local cluster reconciles so fast the next steps may already be"
+  narrate "firing below — that's expected, and it's exactly what we cover next."
   echo ""
 
-  narrate "Watching events as controllers act (5 s)..."
+  cmd "kubectl get namespace,deployment,service -n ${NAMESPACE}"
+  pause
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 3 — Controller Manager detects change
+# ══════════════════════════════════════════════════════════════════════════════
+step3_controller_manager() {
+  step_header "3" "Controller Manager detects change" \
+    "Deployment Controller sees desired=2, actual=0 → creates a ReplicaSet"
+
+  narrate "The Controller Manager runs many control loops. The Deployment"
+  narrate "Controller is one of them — it's always watching etcd for drift"
+  narrate "between desired state and actual state."
+  narrate ""
+  narrate "desired replicas=2, actual=0 → it reacts by creating a ReplicaSet."
+  echo ""
+
+  narrate "Watching events as the controller acts (5 s)..."
   cmd "kubectl get events -n ${NAMESPACE} --sort-by='.lastTimestamp' -w" &
   sleep 5
   cleanup_bg
 
   echo ""
-  narrate "Check the objects that now exist:"
-  cmd "kubectl get deployment,replicaset,pod -n ${NAMESPACE}"
+  narrate "The Deployment now owns a ReplicaSet:"
+  cmd "kubectl get deployment,replicaset -n ${NAMESPACE}"
   pause
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 3 — Scheduler assignment
+# STEP 4 — ReplicaSet creates Pod objects
 # ══════════════════════════════════════════════════════════════════════════════
-step3_scheduler() {
-  step_header "3 / 7" "Scheduler — Node Assignment" \
+step4_replicaset() {
+  step_header "4" "ReplicaSet creates Pod objects" \
+    "desired pods=2, actual=0 → 2 Pod objects created in etcd (still Pending)"
+
+  narrate "The ReplicaSet Controller runs the exact same kind of reconciliation"
+  narrate "loop as Step 3, just one level down: desired pods=2, actual=0 →"
+  narrate "it creates 2 Pod objects in etcd."
+  narrate ""
+  narrate "These pods have no Node assigned yet — that's the Scheduler's job,"
+  narrate "coming up next."
+  echo ""
+
+  narrate "SuccessfulCreate events:"
+  kubectl get events -n "${NAMESPACE}" --sort-by='.lastTimestamp' \
+    | grep -i "successfulcreate" || echo "  (events may not have arrived yet)"
+
+  echo ""
+  cmd "kubectl get pods -n ${NAMESPACE}"
+  pause
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STEP 5 — Scheduler assigns pods to nodes
+# ══════════════════════════════════════════════════════════════════════════════
+step5_scheduler() {
+  step_header "5" "Scheduler assigns pods to nodes" \
     "Watches for pods with .spec.nodeName == '' and assigns them to nodes"
 
   narrate "The kube-scheduler watches for unscheduled pods (nodeName is empty)."
@@ -209,11 +252,11 @@ step3_scheduler() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 4 — Kubelet image pull & container start
+# STEP 6 — kubelet pulls image & starts container
 # ══════════════════════════════════════════════════════════════════════════════
-step4_kubelet() {
-  step_header "4 / 7" "Kubelet — Image Pull & Container Start" \
-    "Kubelet on each node watches for pods assigned to it, then calls the container runtime"
+step6_kubelet() {
+  step_header "6" "kubelet pulls image & starts container" \
+    "kubelet on each node watches for pods assigned to it, then calls the container runtime"
 
   narrate "Once the scheduler writes a nodeName, the kubelet on that node:"
   narrate "  1. Detects the new pod via its informer cache"
@@ -228,6 +271,14 @@ step4_kubelet() {
     || echo "  (events may not have arrived yet)"
 
   echo ""
+  narrate "Watching pod phase transition to Running (15 s)..."
+  watch_for 15 \
+    "kubectl get pods -n ${NAMESPACE} -w"
+
+  echo ""
+  cmd "kubectl get pods -n ${NAMESPACE}"
+
+  echo ""
   narrate "Full pod describe (first pod):"
   local first_pod
   first_pod=$(kubectl get pods -n "${NAMESPACE}" \
@@ -235,39 +286,17 @@ step4_kubelet() {
   if [[ -n "${first_pod}" ]]; then
     cmd "kubectl describe pod ${first_pod} -n ${NAMESPACE}"
   fi
+
+  narrate "Running does NOT mean traffic is being sent to the pod yet."
+  narrate "That gate is the Readiness Probe — next step."
   pause
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 5 — Pods transition Pending → Running
+# STEP 7 — Pod becomes Ready
 # ══════════════════════════════════════════════════════════════════════════════
-step5_running() {
-  step_header "5 / 7" "Pod Phase: Pending → Running" \
-    "Container is up; readiness probe hasn't passed yet — pod is Running but not Ready"
-
-  narrate "A pod's Phase field tracks coarse-grained lifecycle state:"
-  narrate "  Pending  — scheduled but containers not yet started"
-  narrate "  Running  — at least one container is running"
-  narrate "  Succeeded/Failed — terminal states"
-  narrate ""
-  narrate "Running does NOT mean traffic is being sent to the pod."
-  narrate "That gate is the Readiness Probe (Step 6)."
-  echo ""
-
-  narrate "Watching pod phases transition (15 s)..."
-  watch_for 15 \
-    "kubectl get pods -n ${NAMESPACE} -w"
-
-  echo ""
-  cmd "kubectl get pods -n ${NAMESPACE}"
-  pause
-}
-
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 6 — Readiness probe passes → pod becomes Ready
-# ══════════════════════════════════════════════════════════════════════════════
-step6_ready() {
-  step_header "6 / 7" "Readiness Probe → Pod Ready → Service Endpoints" \
+step7_ready() {
+  step_header "7" "Pod becomes Ready" \
     "Kubelet runs GET /health; on success the pod is added to the Service's endpoint list"
 
   narrate "The kubelet calls GET /health every 5 s (periodSeconds)."
@@ -321,17 +350,22 @@ print(json.dumps(json.loads(resp.read()), indent=2))
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STEP 7 — Simulate node failure / pod rescheduling
+# STEP 8 — Self-Healing (beyond the relay race — this loop never stops)
 # ══════════════════════════════════════════════════════════════════════════════
-step7_rescheduling() {
-  step_header "7 / 7" "Self-Healing — Pod Deletion & Rescheduling" \
+step8_self_healing() {
+  step_header "8" "Self-Healing — Pod Deletion & Rescheduling" \
     "ReplicaSet controller detects drift and creates a replacement pod immediately"
 
+  narrate "The 7 steps above ran once, in order, to get us to Ready. But the"
+  narrate "control loops from Steps 3-7 never actually stopped running — they're"
+  narrate "watching continuously. Let's prove it."
+  narrate ""
   narrate "We simulate a node failure by deleting one pod."
   narrate "The ReplicaSet controller sees actual=1, desired=2 and reconciles."
   narrate ""
   narrate "Watch carefully: the old pod Terminates while a brand-new pod appears"
-  narrate "and races through Pending → Running → Ready."
+  narrate "and races through Pending → Running → Ready — the same relay race,"
+  narrate "run again automatically."
   echo ""
 
   local victim
@@ -375,30 +409,32 @@ step7_rescheduling() {
 # ══════════════════════════════════════════════════════════════════════════════
 wrap_up() {
   banner "Demo Complete"
-  echo -e "  ${BOLD}The 7 steps we just watched:${NC}"
+  echo -e "  ${BOLD}Like a relay race — each component passes the baton:${NC}"
   echo ""
-  echo -e "  ${GREEN}1${NC}  API Server      — accepted the manifest, stored in etcd"
-  echo -e "  ${GREEN}2${NC}  Controllers     — Deployment & ReplicaSet reconciliation loops"
-  echo -e "  ${GREEN}3${NC}  Scheduler       — filtered + scored nodes, assigned pods"
-  echo -e "  ${GREEN}4${NC}  Kubelet         — pulled the image, called the container runtime"
-  echo -e "  ${GREEN}5${NC}  Pod phase       — Pending → Running"
-  echo -e "  ${GREEN}6${NC}  Readiness probe — Running → Ready, traffic begins flowing"
-  echo -e "  ${GREEN}7${NC}  Self-healing    — deleted pod replaced automatically"
+  echo -e "  ${GREEN}1${NC}  kubectl sends manifest"
+  echo -e "  ${GREEN}2${NC}  API Server validates & stores in etcd"
+  echo -e "  ${GREEN}3${NC}  Controller Manager detects change"
+  echo -e "  ${GREEN}4${NC}  ReplicaSet creates Pod objects"
+  echo -e "  ${GREEN}5${NC}  Scheduler assigns pods to nodes"
+  echo -e "  ${GREEN}6${NC}  kubelet pulls image & starts container"
+  echo -e "  ${GREEN}7${NC}  Pod becomes Ready"
+  echo -e "  ${GREEN}8${NC}  Self-healing — deleted pod replaced automatically"
   echo ""
-  echo -e "  ${DIM}Cleanup: kubectl delete namespace ${NAMESPACE}${NC}"
+  echo -e "  ${DIM}Cleanup: ./cleanup.sh${NC}"
   echo ""
 }
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 main() {
   preflight
-  step1_api_server
-  step2_controllers
-  step3_scheduler
-  step4_kubelet
-  step5_running
-  step6_ready
-  step7_rescheduling
+  step1_kubectl_sends
+  step2_api_server
+  step3_controller_manager
+  step4_replicaset
+  step5_scheduler
+  step6_kubelet
+  step7_ready
+  step8_self_healing
   wrap_up
 }
 
