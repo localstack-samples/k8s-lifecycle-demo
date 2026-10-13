@@ -93,6 +93,19 @@ For a fully-automatic run (e.g. recording):
 AUTO=1 STEP_DELAY=6 ./demo.sh
 ```
 
+### 4. Test it
+
+```bash
+./test.sh
+```
+
+`test.sh` redeploys the app and checks each step of the lifecycle:
+the manifest is accepted, the Deployment creates a ReplicaSet and 2 Ready pods,
+each pod is scheduled to a node and its container started, both pods are
+Service endpoints, requests through the Service reach both pods, and a deleted
+pod is replaced and becomes Ready. CI runs `setup.sh`, `AUTO=1 ./demo.sh` and
+`test.sh` on every pull request.
+
 ---
 
 ## The 7 steps
@@ -165,9 +178,11 @@ docker compose down -v
 ## Troubleshooting
 
 **Pods stay in `Pending`**
-The image wasn't loaded into the cluster nodes. Re-run `./setup.sh` or manually:
+The image wasn't loaded into the cluster nodes. Re-run `./setup.sh` or import it
+manually. LocalStack appends a hash to the k3d cluster name, so look it up first:
 ```bash
-k3d image import counter-app:latest --cluster lifecycle-demo
+k3d cluster list
+k3d image import counter-app:latest --cluster <lifecycle-demo-hash>
 ```
 
 **`imagePullBackOff`**
