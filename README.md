@@ -148,6 +148,7 @@ curl http://${NODE_IP}:30080/
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CLUSTER_NAME` | `lifecycle-demo` | EKS / k3d cluster name |
+| `K8S_VERSION` | `1.35` | Kubernetes version (LocalStack supports 1.30 to 1.36) |
 | `AWS_DEFAULT_REGION` | `us-east-1` | LocalStack region |
 | `AUTO` | `0` | `1` = skip ENTER prompts |
 | `STEP_DELAY` | `4` | Seconds to pause in AUTO mode |

@@ -5,7 +5,7 @@ set -euo pipefail
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 CLUSTER_NAME="${CLUSTER_NAME:-lifecycle-demo}"
-K8S_VERSION="${K8S_VERSION:-1.29}"
+K8S_VERSION="${K8S_VERSION:-1.35}"
 IMAGE_NAME="counter-app:latest"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-600}"
