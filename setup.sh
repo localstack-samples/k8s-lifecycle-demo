@@ -5,9 +5,10 @@ set -euo pipefail
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 CLUSTER_NAME="${CLUSTER_NAME:-lifecycle-demo}"
-K8S_VERSION="${K8S_VERSION:-1.29}"
+K8S_VERSION="${K8S_VERSION:-1.35}"
 IMAGE_NAME="counter-app:latest"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-600}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Colors ─────────────────────────────────────────────────────────────────────
@@ -39,9 +40,17 @@ else
   info "Starting LocalStack via Docker Compose..."
   docker compose -f "${SCRIPT_DIR}/docker-compose.yml" up -d
   info "Waiting for LocalStack to be ready..."
-  until curl -sf http://localhost:4566/_localstack/health | grep -q '"eks": "running"' 2>/dev/null; do
+  # EKS reports "available" until its first request, then "running"
+  waited=0
+  until curl -sf http://localhost:4566/_localstack/health | grep -qE '"eks": ?"(available|running)"'; do
+    if (( waited >= MAX_WAIT_SECONDS )); then
+      echo ""
+      echo "ERROR: LocalStack did not become ready within ${MAX_WAIT_SECONDS}s."
+      exit 1
+    fi
     echo -n "."
     sleep 3
+    waited=$((waited + 3))
   done
   echo ""
 fi
@@ -145,10 +154,17 @@ else
     --region "${REGION}"
 
   info "Waiting for cluster to become ACTIVE..."
+  waited=0
   until $AWSCLI eks describe-cluster --name "${CLUSTER_NAME}" --region "${REGION}" \
           --query 'cluster.status' --output text 2>/dev/null | grep -q ACTIVE; do
+    if (( waited >= MAX_WAIT_SECONDS )); then
+      echo ""
+      echo "ERROR: Cluster '${CLUSTER_NAME}' did not become ACTIVE within ${MAX_WAIT_SECONDS}s."
+      exit 1
+    fi
     echo -n "."
     sleep 5
+    waited=$((waited + 5))
   done
   echo ""
 fi
@@ -173,11 +189,17 @@ info "Image built."
 # ── 7. Load image into the cluster ────────────────────────────────────────────
 # LocalStack EKS uses k3d under the hood.
 heading "Loading image into cluster nodes"
+# LocalStack appends a hash to the k3d cluster name, so look up the real name.
+K3D_CLUSTER=""
 if command -v k3d &>/dev/null; then
-  info "Using k3d to import image..."
-  k3d image import "${IMAGE_NAME}" --cluster "${CLUSTER_NAME}"
+  K3D_CLUSTER=$(k3d cluster list --no-headers 2>/dev/null \
+    | awk '{print $1}' | grep "^${CLUSTER_NAME}" | head -1 || true)
+fi
+if [[ -n "${K3D_CLUSTER}" ]]; then
+  info "Using k3d to import image into cluster '${K3D_CLUSTER}'..."
+  k3d image import "${IMAGE_NAME}" --cluster "${K3D_CLUSTER}"
 else
-  warn "k3d not found — falling back to docker exec import."
+  warn "k3d not found or cluster not listed — falling back to docker exec import."
   # LocalStack EKS creates k3d containers internally. Each node container runs
   # k3s, which bundles its own containerd. The 'ctr' CLI is not in PATH, but
   # 'k3s ctr' is, and it uses the k3s-specific socket at:

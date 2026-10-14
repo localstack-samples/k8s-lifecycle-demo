@@ -1,0 +1,60 @@
+name: Run the lifecycle demo on LocalStack EKS
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  demo:
+    name: Set up the cluster, run the demo and test it
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install lstk and k3d
+        run: |
+          npm install -g @localstack/lstk
+          lstk setup aws --force --non-interactive
+          curl -sfL https://raw.githubusercontent.com/k3d-io/k3d/v5.7.4/install.sh | TAG=v5.7.4 bash
+
+      - name: Create the EKS cluster and load the app image
+        env:
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+        run: ./setup.sh
+
+      - name: Run the demo
+        run: AUTO=1 STEP_DELAY=1 ./demo.sh
+
+      - name: Run tests
+        run: ./test.sh
+
+      - name: Show cluster state and LocalStack logs
+        if: failure()
+        run: |
+          kubectl get all -A || true
+          kubectl describe pods -n demo || true
+          kubectl get events -n demo --sort-by=.lastTimestamp || true
+          k3d cluster list || true
+          docker ps -a
+          docker logs localstack 2>&1 | tail -300
